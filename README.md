@@ -1,0 +1,1 @@
+StockAnalysis - LQRP Platform
