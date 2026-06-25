@@ -11,7 +11,9 @@ interface PortfolioHolding extends Stock {}
 
 type SortKey = keyof Stock;
 
-const API = '/api';
+const API = import.meta.env.PROD
+  ? 'https://stockanalysis-api.eranhor.workers.dev'
+  : '/api';
 const MODEL = 'lqrp_v2';
 
 async function fetchJSON(path: string) {
