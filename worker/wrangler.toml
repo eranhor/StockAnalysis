@@ -1,0 +1,11 @@
+name = "lqrp-api"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "lqrp-db"
+database_id = "PLACEHOLDER"
+
+[env.production]
+d1_databases = [{ binding = "DB", database_name = "lqrp-db-prod", database_id = "PLACEHOLDER" }]
