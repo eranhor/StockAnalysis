@@ -2,10 +2,13 @@ export interface Env {
   DB: D1Database;
 }
 
+const DEFAULT_MODEL = 'lqrp_v2';
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname;
+    const model = url.searchParams.get('model') || DEFAULT_MODEL;
 
     const cors = {
       "Access-Control-Allow-Origin": "*",
@@ -18,7 +21,7 @@ export default {
     }
 
     try {
-      // GET /api/rankings
+      // GET /api/rankings?model=lqrp_v2&limit=100
       if (path === "/api/rankings") {
         const limit = parseInt(url.searchParams.get("limit") || "100");
         const { results } = await env.DB.prepare(`
@@ -31,20 +34,20 @@ export default {
                  s.announcement_scraped, s.archetype
           FROM lqrp_scores s
           JOIN companies c ON c.ticker = s.ticker
-          WHERE s.model_version = 'v2.0'
+          WHERE s.model_version = ?
           ORDER BY s.LQRP_score DESC
           LIMIT ?
-        `).bind(limit).all();
+        `).bind(model, limit).all();
         return new Response(JSON.stringify(results), { headers: cors });
       }
 
-      // GET /api/company/:ticker
+      // GET /api/company/:ticker?model=lqrp_v2
       const companyMatch = path.match(/^\/api\/company\/([A-Z0-9]{3,6})$/);
       if (companyMatch) {
         const ticker = companyMatch[1];
         const score = await env.DB.prepare(
-          "SELECT * FROM lqrp_scores WHERE ticker = ? AND model_version = 'v2.0' ORDER BY scoring_date DESC LIMIT 1"
-        ).bind(ticker).first();
+          "SELECT * FROM lqrp_scores WHERE ticker = ? AND model_version = ? ORDER BY scoring_date DESC LIMIT 1"
+        ).bind(ticker, model).first();
         const company = await env.DB.prepare(
           "SELECT * FROM companies WHERE ticker = ?"
         ).bind(ticker).first();
@@ -60,7 +63,7 @@ export default {
         }), { headers: cors });
       }
 
-      // GET /api/portfolio
+      // GET /api/portfolio?model=lqrp_v2
       if (path === "/api/portfolio") {
         const { results } = await env.DB.prepare(`
           SELECT c.ticker, c.name, c.sector, ROUND(c.market_cap/1e6,1) as market_cap_m,
@@ -71,9 +74,9 @@ export default {
                  s.gate_status, ROUND(s.data_coverage_pct,0) as data_coverage_pct
           FROM lqrp_scores s
           JOIN companies c ON c.ticker = s.ticker
-          WHERE s.model_version = 'v2.0' AND s.final_weight > 0.5
+          WHERE s.model_version = ? AND s.final_weight > 0.5
           ORDER BY s.final_weight DESC
-        `).all();
+        `).bind(model).all();
         const total = results.reduce((sum: number, r: any) => sum + r.final_weight, 0);
         return new Response(JSON.stringify({ holdings: results, total_weight: Math.round(total * 10) / 10 }), { headers: cors });
       }
@@ -81,9 +84,9 @@ export default {
       // GET /api/health
       if (path === "/api/health") {
         const count = await env.DB.prepare(
-          "SELECT COUNT(*) as n FROM lqrp_scores WHERE model_version = 'v2.0'"
-        ).first();
-        return new Response(JSON.stringify({ status: "ok", stocks_scored: (count as any)?.n || 0 }), { headers: cors });
+          "SELECT COUNT(*) as n FROM lqrp_scores WHERE model_version = ?"
+        ).bind(model).first();
+        return new Response(JSON.stringify({ status: "ok", model, stocks_scored: (count as any)?.n || 0 }), { headers: cors });
       }
 
       return new Response(JSON.stringify({ error: "Not found" }), { status: 404, headers: cors });

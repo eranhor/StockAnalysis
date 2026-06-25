@@ -3,7 +3,7 @@ import sqlite3
 import os
 import json
 
-DB_PATH = os.environ.get("LQRP_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "lqrp.db"))
+DB_PATH = os.environ.get("STOCKANALYSIS_DB_PATH", os.path.join(os.path.dirname(__file__), "..", "data", "stockanalysis.db"))
 
 
 def get_db(db_path=None):
@@ -33,6 +33,48 @@ def insert_company(conn, ticker, name, gics_industry=None, sector=None, market_c
         INSERT OR REPLACE INTO companies (ticker, name, gics_industry, sector, market_cap, last_updated)
         VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
     """, (ticker, name, gics_industry, sector, market_cap))
+    conn.commit()
+
+
+def insert_info_snapshot(conn, ticker, info, snapshot_date=None):
+    """Save the full yfinance info dict — nothing discarded."""
+    from datetime import date as dt_date
+    sd = snapshot_date or dt_date.today().isoformat()
+    conn.execute("""
+        INSERT OR REPLACE INTO info_snapshots
+        (ticker, snapshot_date,
+         beta, peg_ratio, price_to_book, price_to_sales,
+         trailing_pe, forward_pe, enterprise_to_revenue, enterprise_to_ebitda,
+         return_on_equity, return_on_assets, profit_margins, operating_margins,
+         earnings_growth, earnings_quarterly_growth,
+         dividend_yield, dividend_rate, payout_ratio, five_year_avg_dividend_yield,
+         short_ratio, short_pct_float, shares_short,
+         float_shares, implied_shares_outstanding,
+         fifty_two_week_high, fifty_two_week_low,
+         fifty_day_avg, two_hundred_day_avg,
+         average_volume, average_volume_10d,
+         recommendation_mean, number_analysts,
+         target_mean_price, target_high_price, target_low_price,
+         raw_json)
+        VALUES (?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+         ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        ticker, sd,
+        info.get("beta"), info.get("pegRatio"), info.get("priceToBook"), info.get("priceToSales"),
+        info.get("trailingPE"), info.get("forwardPE"), info.get("enterpriseToRevenue"), info.get("enterpriseToEbitda"),
+        info.get("returnOnEquity"), info.get("returnOnAssets"), info.get("profitMargins"), info.get("operatingMargins"),
+        info.get("earningsGrowth"), info.get("earningsQuarterlyGrowth"),
+        info.get("dividendYield"), info.get("dividendRate"), info.get("payoutRatio"), info.get("fiveYearAvgDividendYield"),
+        info.get("shortRatio"), info.get("shortPercentOfFloat"), info.get("sharesShort"),
+        info.get("floatShares"), info.get("impliedSharesOutstanding"),
+        info.get("fiftyTwoWeekHigh"), info.get("fiftyTwoWeekLow"),
+        info.get("fiftyDayAverage"), info.get("twoHundredDayAverage"),
+        info.get("averageVolume"), info.get("averageDailyVolume10Day"),
+        info.get("recommendationMean"), info.get("numberOfAnalystOpinions"),
+        info.get("targetMeanPrice"), info.get("targetHighPrice"), info.get("targetLowPrice"),
+        str(info)  # raw JSON catch-all
+    ))
     conn.commit()
 
 

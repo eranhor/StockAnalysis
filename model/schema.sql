@@ -3,14 +3,14 @@
 -- Covers rockets model + extensible for future models
 
 -- === CORE COMPANY DATA ===
-CREATE TABLE companies (
+CREATE TABLE IF NOT EXISTS companies (
     ticker TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     gics_industry TEXT,
     sector TEXT,
     listing_date DATE,
     delisted_date DATE,
-    is_equity INTEGER DEFAULT 1,  -- 0 for ETFs, warrants, bonds
+    is_equity INTEGER DEFAULT 1,
     market_cap REAL,
     enterprise_value REAL,
     shares_outstanding REAL,
@@ -19,7 +19,54 @@ CREATE TABLE companies (
 );
 
 -- === PRICE HISTORY ===
-CREATE TABLE prices_daily (
+CREATE TABLE IF NOT EXISTS prices_daily (
+    ticker TEXT NOT NULL,
+    date DATE NOT NULL,
+    open REAL,
+    high REAL,
+    low REAL,
+    close REAL,
+    volume REAL,
+    adjusted_close REAL,
+    source TEXT DEFAULT 'yfinance',
+    PRIMARY KEY (ticker, date)
+);
+
+-- === YFINANCE INFO SNAPSHOTS (full download, nothing discarded) ===
+CREATE TABLE IF NOT EXISTS info_snapshots (
+    ticker TEXT NOT NULL,
+    snapshot_date DATE NOT NULL,
+    source TEXT DEFAULT 'yfinance',
+    -- Valuation
+    beta REAL, peg_ratio REAL, price_to_book REAL, price_to_sales REAL,
+    trailing_pe REAL, forward_pe REAL, enterprise_to_revenue REAL,
+    enterprise_to_ebitda REAL,
+    -- Profitability
+    return_on_equity REAL, return_on_assets REAL, profit_margins REAL,
+    operating_margins REAL,
+    -- Growth
+    earnings_growth REAL, earnings_quarterly_growth REAL,
+    -- Dividends
+    dividend_yield REAL, dividend_rate REAL, payout_ratio REAL,
+    five_year_avg_dividend_yield REAL,
+    -- Short / float
+    short_ratio REAL, short_pct_float REAL, shares_short REAL,
+    float_shares REAL, implied_shares_outstanding REAL,
+    -- Price bands
+    fifty_two_week_high REAL, fifty_two_week_low REAL,
+    fifty_day_avg REAL, two_hundred_day_avg REAL,
+    -- Volume
+    average_volume REAL, average_volume_10d REAL,
+    -- Analyst
+    recommendation_mean REAL, number_analysts INTEGER,
+    target_mean_price REAL, target_high_price REAL, target_low_price REAL,
+    -- Full JSON catch-all
+    raw_json TEXT,
+    PRIMARY KEY (ticker, snapshot_date)
+);
+
+-- === PRICE HISTORY ===
+CREATE TABLE IF NOT EXISTS prices_daily (
     ticker TEXT NOT NULL,
     date DATE NOT NULL,
     open REAL,
@@ -33,35 +80,53 @@ CREATE TABLE prices_daily (
 );
 
 -- === QUARTERLY FINANCIAL STATEMENTS ===
-CREATE TABLE financials_quarterly (
+CREATE TABLE IF NOT EXISTS financials_quarterly (
     ticker TEXT NOT NULL,
     period_end DATE NOT NULL,
     -- Income Statement
-    revenue REAL,
+    total_revenue REAL,
+    revenue REAL,  -- net of operating expenses
     gross_profit REAL,
     operating_expense REAL,
+    operating_income REAL,
+    sg_and_a REAL,                -- selling, general & admin
+    research_and_development REAL,
     ebitda REAL,
+    ebit REAL,
+    interest_expense REAL,
+    depreciation REAL,
+    tax_provision REAL,
     net_income REAL,
     -- Cash Flow
     operating_cf REAL,
     free_cf REAL,
     capital_expenditure REAL,
+    change_in_cash REAL,
+    change_in_working_capital REAL,
     -- Balance Sheet
     cash REAL,
     total_debt REAL,
+    long_term_debt REAL,
+    short_long_term_debt REAL,
     current_assets REAL,
     current_liabilities REAL,
+    other_current_liabilities REAL,
     total_assets REAL,
-    ppe REAL,
+    ppe REAL,                     -- property, plant & equipment
+    goodwill REAL,
+    intangible_assets REAL,
+    retained_earnings REAL,
+    common_stock_equity REAL,
+    total_capitalization REAL,
     shares_outstanding REAL,
     -- Source tracking
     source TEXT DEFAULT 'yfinance',
-    data_quality TEXT DEFAULT 'full',  -- 'full', 'partial', 'estimated'
+    data_quality TEXT DEFAULT 'full',
     PRIMARY KEY (ticker, period_end)
 );
 
 -- === COMPUTED FINANCIAL RATIOS ===
-CREATE TABLE financial_ratios (
+CREATE TABLE IF NOT EXISTS financial_ratios (
     ticker TEXT NOT NULL,
     period_end DATE NOT NULL,
     -- Margins
@@ -101,7 +166,7 @@ CREATE TABLE financial_ratios (
 );
 
 -- === ANNOUNCEMENTS ===
-CREATE TABLE announcements (
+CREATE TABLE IF NOT EXISTS announcements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
     date DATE NOT NULL,
@@ -117,7 +182,7 @@ CREATE TABLE announcements (
 );
 
 -- === INSIDER TRANSACTIONS ===
-CREATE TABLE insider_transactions (
+CREATE TABLE IF NOT EXISTS insider_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker TEXT NOT NULL,
     date DATE NOT NULL,
@@ -131,7 +196,7 @@ CREATE TABLE insider_transactions (
 );
 
 -- === OWNERSHIP SNAPSHOTS ===
-CREATE TABLE ownership_snapshots (
+CREATE TABLE IF NOT EXISTS ownership_snapshots (
     ticker TEXT NOT NULL,
     date DATE NOT NULL,
     insider_pct REAL,
@@ -143,7 +208,7 @@ CREATE TABLE ownership_snapshots (
 );
 
 -- === LQRP SCORES ===
-CREATE TABLE lqrp_scores (
+CREATE TABLE IF NOT EXISTS lqrp_scores (
     ticker TEXT NOT NULL,
     scoring_date DATE NOT NULL,
     model_version TEXT NOT NULL,  -- 'v2.0', etc.
@@ -174,7 +239,7 @@ CREATE TABLE lqrp_scores (
 );
 
 -- === MODEL VERSIONS ===
-CREATE TABLE model_versions (
+CREATE TABLE IF NOT EXISTS model_versions (
     version TEXT PRIMARY KEY,
     applied_date DATE,
     description TEXT,
@@ -184,7 +249,7 @@ CREATE TABLE model_versions (
 );
 
 -- === DATA SOURCE TRACKING ===
-CREATE TABLE data_sources (
+CREATE TABLE IF NOT EXISTS data_sources (
     source_name TEXT PRIMARY KEY,
     last_fetch TIMESTAMP,
     fetch_status TEXT,  -- 'success', 'partial', 'failed'
@@ -194,11 +259,11 @@ CREATE TABLE data_sources (
 );
 
 -- === INDEXES ===
-CREATE INDEX idx_prices_ticker_date ON prices_daily(ticker, date);
-CREATE INDEX idx_financials_ticker_date ON financials_quarterly(ticker, period_end);
-CREATE INDEX idx_ratios_ticker_date ON financial_ratios(ticker, period_end);
-CREATE INDEX idx_announcements_ticker_date ON announcements(ticker, date);
-CREATE INDEX idx_announcements_type ON announcements(ticker, type);
-CREATE INDEX idx_insider_ticker_date ON insider_transactions(ticker, date);
-CREATE INDEX idx_scores_ticker_version ON lqrp_scores(ticker, model_version);
-CREATE INDEX idx_scores_date ON lqrp_scores(scoring_date);
+CREATE INDEX IF NOT EXISTS idx_prices_ticker_date ON prices_daily(ticker, date);
+CREATE INDEX IF NOT EXISTS idx_financials_ticker_date ON financials_quarterly(ticker, period_end);
+CREATE INDEX IF NOT EXISTS idx_ratios_ticker_date ON financial_ratios(ticker, period_end);
+CREATE INDEX IF NOT EXISTS idx_announcements_ticker_date ON announcements(ticker, date);
+CREATE INDEX IF NOT EXISTS idx_announcements_type ON announcements(ticker, type);
+CREATE INDEX IF NOT EXISTS idx_insider_ticker_date ON insider_transactions(ticker, date);
+CREATE INDEX IF NOT EXISTS idx_scores_ticker_version ON lqrp_scores(ticker, model_version);
+CREATE INDEX IF NOT EXISTS idx_scores_date ON lqrp_scores(scoring_date);

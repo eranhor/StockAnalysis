@@ -1,11 +1,11 @@
-name = "lqrp-api"
+name = "stockanalysis-api"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 
 [[d1_databases]]
 binding = "DB"
-database_name = "lqrp-db"
+database_name = "stockanalysis-db"
 database_id = "PLACEHOLDER"
 
 [env.production]
-d1_databases = [{ binding = "DB", database_name = "lqrp-db-prod", database_id = "PLACEHOLDER" }]
+d1_databases = [{ binding = "DB", database_name = "stockanalysis-db-prod", database_id = "PLACEHOLDER" }]

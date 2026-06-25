@@ -346,5 +346,5 @@ def score_cohort(rows):
     df["final_weight"] = np.where(df["gate_status"] != "hard_excluded",
                                   df["capped_weight"] / total_c * 100 if total_c > 0 else 0, 0)
 
-    df["model_version"] = "v2.0"
+    df["model_version"] = "lqrp_v2"
     return df.sort_values("LQRP_score", ascending=False)

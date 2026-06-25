@@ -11,11 +11,12 @@ interface PortfolioHolding extends Stock {}
 
 type SortKey = keyof Stock;
 
-// API base — proxied to worker in dev, same origin in prod
 const API = '/api';
+const MODEL = 'lqrp_v2';
 
 async function fetchJSON(path: string) {
-  const r = await fetch(`${API}${path}`);
+  const sep = path.includes('?') ? '&' : '?';
+  const r = await fetch(`${API}${path}${sep}model=${MODEL}`);
   if (!r.ok) throw new Error(`${r.status}`);
   return r.json();
 }
@@ -40,7 +41,7 @@ function scoreColor(v: number) {
 export default function App() {
   const [rankings, setRankings] = useState<Stock[]>([]);
   const [portfolio, setPortfolio] = useState<PortfolioHolding[]>([]);
-  const [health, setHealth] = useState<{stocks_scored: number} | null>(null);
+  const [health, setHealth] = useState<{stocks_scored: number; model: string} | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>('LQRP_score');
   const [sortDir, setSortDir] = useState<'asc'|'desc'>('desc');
   const [loading, setLoading] = useState(true);
@@ -76,16 +77,17 @@ export default function App() {
     </th>
   );
 
-  if (loading) return <div className="flex items-center justify-center h-screen text-gray-500">Loading...</div>;
+  if (loading) return <div className="flex items-center justify-center h-screen text-gray-500">Loading…</div>;
 
   return (
     <div className="max-w-7xl mx-auto p-4 sm:p-6">
       {/* Header */}
       <header className="mb-6">
-        <h1 className="text-2xl font-bold tracking-tight">
-          LQRP <span className="text-gray-500">v2.0</span>
-        </h1>
-        <p className="text-gray-500 text-sm">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold tracking-tight">StockAnalysis</h1>
+          <span className="text-xs px-2 py-0.5 rounded border border-purple-800 bg-purple-900/30 text-purple-300">LQRP v2.0</span>
+        </div>
+        <p className="text-gray-500 text-sm mt-1">
           ASX Micro/Small Cap Rocket Screener
           {health && ` — ${health.stocks_scored} stocks scored`}
         </p>
@@ -157,8 +159,10 @@ export default function App() {
 
       {/* Footer */}
       <footer className="mt-6 text-xs text-gray-600">
-        <p>Data coverage shows % of sub-factor weight with non-proxy data. "Scraped" = ASX announcements processed.</p>
-        <p className="mt-1">LQRP v2.0 — Model: 0.45L + 0.25Q + 0.20R + 0.10P</p>
+        <p>Model: 0.45L + 0.25Q + 0.20R + 0.10P. Coverage = % of sub-factor weight with non-proxy data.</p>
+        <p className="mt-1">
+          Scraped: ASX announcements processed. Future models will be accessible via the model selector.
+        </p>
       </footer>
     </div>
   );

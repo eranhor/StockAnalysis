@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import warnings
 warnings.filterwarnings("ignore")
 
-from db import init_db, get_db, insert_company, insert_prices, insert_financials, insert_ratios, insert_scores
+from db import init_db, get_db, insert_company, insert_info_snapshot, insert_prices, insert_financials, insert_ratios, insert_scores
 from score import score_stock, score_cohort
 
 # Pilot stocks — 15 from the paper with good yfinance coverage
@@ -218,7 +218,7 @@ def main():
     print("=" * 60)
 
     # Initialize DB
-    db_path = os.path.join(os.path.dirname(__file__), "..", "data", "lqrp_pilot.db")
+    db_path = os.path.join(os.path.dirname(__file__), "..", "data", "stockanalysis.db")
     init_db(db_path)
     conn = get_db(db_path)
 
@@ -247,6 +247,9 @@ def main():
                        info.get("industry"),
                        info.get("sector"),
                        info.get("marketCap"))
+
+        # Full info snapshot (save everything for future models)
+        insert_info_snapshot(conn, ticker, info)
 
         # Prices
         insert_prices(conn, ticker, data["prices"])
