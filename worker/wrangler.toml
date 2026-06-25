@@ -5,7 +5,7 @@ compatibility_date = "2024-01-01"
 [[d1_databases]]
 binding = "DB"
 database_name = "stockanalysis-db"
-database_id = "PLACEHOLDER"
+database_id = "7b6c2130-5feb-49bb-b20a-a246e0ac08dc"
 
 [env.production]
-d1_databases = [{ binding = "DB", database_name = "stockanalysis-db-prod", database_id = "PLACEHOLDER" }]
+d1_databases = [{ binding = "DB", database_name = "stockanalysis-db", database_id = "7b6c2130-5feb-49bb-b20a-a246e0ac08dc" }]
