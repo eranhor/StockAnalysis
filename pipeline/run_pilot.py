@@ -2,7 +2,7 @@
 LQRP Pilot Runner — End-to-end pipeline for a handful of test stocks.
 Downloads data from yfinance, scores with LQRP v2.0, stores in SQLite.
 """
-import sys, os, time
+import sys, os, time, json
 sys.path.insert(0, os.path.dirname(__file__))
 
 import yfinance as yf
@@ -14,7 +14,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 from db import init_db, get_db, insert_company, insert_info_snapshot, insert_prices, insert_financials, insert_ratios, insert_scores
-from score import score_stock, score_cohort
+from score import score_cohort, read_scoring_data
 
 # Pilot stocks — 15 from the paper with good yfinance coverage
 PILOT_TICKERS = [
@@ -235,53 +235,28 @@ def main():
 
     print(f"\n  Fetched: {len(results)}/{len(PILOT_TICKERS)}")
 
-    # Store in DB
+    # Store in DB (all downloaded data, nothing discarded)
     print("\n─── Storing in database ───")
-    scored_rows = []
     for ticker, data in results.items():
         info = data["info"]
-
-        # Company
-        insert_company(conn, ticker,
-                       info.get("shortName", ticker),
-                       info.get("industry"),
-                       info.get("sector"),
-                       info.get("marketCap"))
-
-        # Full info snapshot (save everything for future models)
+        insert_company(conn, ticker, info.get("shortName", ticker),
+                       info.get("industry"), info.get("sector"),
+                       info.get("marketCap"), info.get("sharesOutstanding"))
         insert_info_snapshot(conn, ticker, info)
-
-        # Prices
         insert_prices(conn, ticker, data["prices"])
-
-        # Financials (with info fallback)
         fin = extract_financials(data)
         if fin.get("revenue") or fin.get("shares_outstanding"):
             fin["period_end"] = fin.get("period_end") or date.today().isoformat()
             insert_financials(conn, ticker, fin["period_end"], fin)
             insert_ratios(conn, ticker, fin["period_end"], fin)
-
-        # Score
-        market_data = {
-            "market_cap": info.get("marketCap"),
-            "enterprise_value": info.get("enterpriseValue"),
-            "shares_outstanding": info.get("sharesOutstanding"),
-            "sector": info.get("sector", "Unknown"),
-            "revenue_growth": info.get("revenueGrowth"),
-            "insider_pct": info.get("heldPercentInsiders"),
-            "inst_pct": info.get("heldPercentInstitutions"),
-        }
-        scored = score_stock(market_data, data["prices"], fin,
-                             info.get("sector", "Unknown"))
-        scored["ticker"] = ticker
-        scored_rows.append(scored)
-
         info_fields = sum(1 for v in fin.values() if v is not None)
         print(f"  {ticker}: stored ({len(data['prices'])} prices, {info_fields} info fields)")
 
-    # Cohort scoring
-    print("\n─── Cohort scoring ───")
-    df = score_cohort(scored_rows)
+    # Score from DB (single source of truth)
+    print("\n─── Scoring from database ───")
+    df = read_scoring_data(conn)
+    print(f"  Read {len(df)} stocks from DB")
+    df = score_cohort(df)
     today = date.today().isoformat()
 
     for _, row in df.iterrows():
@@ -315,17 +290,14 @@ def main():
         print(f"{r['ticker']:<6} {r['role']:<16} {r['LQRP_score']:>5.1f} {r['L_score']:>4.0f} {r['Q_score']:>4.0f} {r['R_score']:>4.0f} {r['P_score']:>4.0f} {r['final_weight']:>6.1f}% ${alloc:>5.0f}")
     print(f"{'Total':<6} {'':<16} {'':>6} {'':>5} {'':>5} {'':>5} {'':>5} {total_w:>6.1f}% ${total_w/100*20000:>5.0f}")
 
-    # Data coverage summary
+    # Data coverage — read from DB scores
     print("\n─── Data Coverage ───")
-    for _, r in df.iterrows():
-        flags = r.get("coverage_flags", {})
-        if isinstance(flags, str):
-            import json; flags = json.loads(flags)
-        flag_summary = ", ".join(f"{k}:{v}" for k, v in sorted(flags.items()) if v != "OK")
+    cov_rows = conn.execute("SELECT ticker, data_coverage_pct, coverage_flags FROM lqrp_scores WHERE model_version='lqrp_v2'").fetchall()
+    for r in cov_rows:
+        flags = json.loads(r['coverage_flags']) if r['coverage_flags'] else {}
+        flag_summary = ", ".join(f"{k}:{v}" for k, v in sorted(flags.items()) if v not in ("OK", "MANUAL"))
         if flag_summary:
             print(f"  {r['ticker']:<6} {r['data_coverage_pct']:.0f}%  [{flag_summary}]")
-        else:
-            print(f"  {r['ticker']:<6} {r['data_coverage_pct']:.0f}%  [all OK]")
 
     conn.close()
     print(f"\nDone. Database: {db_path}")

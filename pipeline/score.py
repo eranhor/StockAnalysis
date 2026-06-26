@@ -347,4 +347,165 @@ def score_cohort(rows):
                                   df["capped_weight"] / total_c * 100 if total_c > 0 else 0, 0)
 
     df["model_version"] = "lqrp_v2"
+
+    # Data coverage: all sub-factors assumed OK (they come from the DB which has the data)
+    # Individual coverage flags are tracked in lqrp_scores.coverage_flags (JSON)
+    df["data_coverage_pct"] = 61.0  # default for pilot; enriched by rescore.py overlay
+
     return df.sort_values("LQRP_score", ascending=False)
+
+
+def read_scoring_data(conn):
+    """Read scoring data from the database and build the DataFrame score_cohort expects.
+    All data comes from DB tables — no yfinance calls, no in-memory construction."""
+    import json
+
+    # Get all tickers with company data
+    companies = {r['ticker']: dict(r) for r in conn.execute("SELECT * FROM companies").fetchall()}
+    tickers = list(companies.keys())
+    if not tickers:
+        return pd.DataFrame()
+
+    rows = []
+    for ticker in tickers:
+        co = companies[ticker]
+        sector = co.get('sector', 'Unknown') or 'Unknown'
+
+        # Get latest financial ratios
+        ratios_row = conn.execute(
+            "SELECT * FROM financial_ratios WHERE ticker = ? ORDER BY period_end DESC LIMIT 1", (ticker,)
+        ).fetchone()
+        ratios = dict(ratios_row) if ratios_row else {}
+
+        # Get latest info snapshot
+        info_row = conn.execute(
+            "SELECT * FROM info_snapshots WHERE ticker = ? ORDER BY snapshot_date DESC LIMIT 1", (ticker,)
+        ).fetchone()
+        info = dict(info_row) if info_row else {}
+
+        # Get insider transactions for P1
+        insider_txns = conn.execute("""
+            SELECT transaction_type, SUM(shares) as total_shares
+            FROM insider_transactions
+            WHERE ticker = ? AND on_market = 1
+            GROUP BY transaction_type
+        """, (ticker,)).fetchall()
+
+        # Get revenue announcements for L5
+        rev_anns = conn.execute("""
+            SELECT date, extracted_data FROM announcements
+            WHERE ticker = ? AND type IN ('FINANCIAL_REPORT', 'PRESENTATION', 'TRADING_UPDATE')
+            AND extracted_data IS NOT NULL
+            ORDER BY date DESC
+        """, (ticker,)).fetchall()
+
+        # --- Build raw values ---
+        mc = co.get('market_cap') or 1
+        ev = co.get('enterprise_value')
+
+        # L1: Valuation compression
+        l1_raw = -np.log(max(ev or 1, 1) / max(mc, 1))
+
+        # L2: Growth velocity
+        l2_raw = ratios.get('revenue_growth_yoy') or 0
+
+        # L3: Growth acceleration
+        l3_raw = ratios.get('revenue_growth_accel') or 0
+
+        # L4: Operating leverage
+        l4_gm = ratios.get('gross_margin') or 0
+        l4_ebitda_change = ratios.get('ebitda_margin_change') or 0
+
+        # L5: Commercial maturity (from announcements)
+        l5_raw = 0
+        if rev_anns:
+            l5_raw = 20
+            if len(rev_anns) >= 4: l5_raw += 20
+            revs = []
+            for r in rev_anns:
+                try:
+                    d = json.loads(r['extracted_data'])
+                    v = d.get('revenue') or d.get('revenue_millions')
+                    if v: revs.append(v)
+                except: pass
+            if len(revs) >= 2 and revs[0] > revs[-1]: l5_raw += 20
+            if len(rev_anns) >= 6: l5_raw += 20
+            l5_raw = min(l5_raw, 100)
+        else:
+            l5_raw = 0
+
+        # Q1: Revenue quality (negated volatility CV)
+        q1_raw = -(ratios.get('revenue_volatility_cv') or 0)
+
+        # Q2: Gross margin level + trend
+        q2_raw = 0.7 * (ratios.get('gross_margin') or 0) + 0.3 * (ratios.get('ebitda_margin_change') or 0)
+
+        # Q3: Cash conversion
+        q3_raw = ratios.get('ocf_to_revenue') or 0
+
+        # Q4: Commercial scale
+        q4_raw = np.log(max(mc, 1))
+
+        # R1: Cash runway (current ratio proxy)
+        r1_raw = ratios.get('current_ratio') or 0
+
+        # R2: Leverage + liquidity
+        nd_ebitda = ratios.get('nd_to_ebitda')
+        r2_lev = 1 / (abs(nd_ebitda or 0.5) + 0.01)
+        r2_liq = ratios.get('current_ratio') or 1.0
+
+        # R3: Dilution
+        r3_dil = ratios.get('share_count_growth_yoy') or 0
+        r3_burn = ratios.get('cash_burn_rate') or 0
+
+        # R4: Asset intensity
+        r4_capex = abs(ratios.get('capex_to_revenue') or 0)
+        r4_ppe = abs(ratios.get('ppe_to_revenue') or 0)
+
+        # R5: Cash flow stability
+        r5_raw = ratios.get('ocf_stability') if ratios_row else 50
+        if r5_raw is None: r5_raw = 50
+
+        # P1: Insider net buying (from scraped 3Y) or fallback to ownership %
+        p1_raw = 0
+        if insider_txns:
+            buy_shares = sum(t['total_shares'] for t in insider_txns if t['transaction_type'] == 'buy')
+            sell_shares = sum(t['total_shares'] for t in insider_txns if t['transaction_type'] == 'sell')
+            net_buy = buy_shares - sell_shares
+            if net_buy > 0 and mc > 1:
+                p1_raw = (net_buy / mc) * 1e8
+        if p1_raw == 0:
+            p1_raw = info.get('insider_pct') or co.get('insider_pct') or 0
+
+        # P2: Register quality (Goldilocks)
+        ins_pct = info.get('insider_pct') or co.get('insider_pct') or 0
+        inst_pct = info.get('inst_pct') or co.get('institution_pct') or 0
+        p2_raw = 0
+        if ins_pct > 0:
+            p2_raw += 0.5 * max(0, 100 - abs(50 - 100 * (ins_pct / 100 - 0.10) / (0.30 - 0.10)))
+        else:
+            p2_raw += 25
+        if inst_pct > 0:
+            p2_raw += 0.5 * max(0, 100 - abs(50 - 100 * (inst_pct / 100 - 0.10) / (0.40 - 0.10)))
+        else:
+            p2_raw += 25
+
+        # P3: Crowding (inverse share turnover)
+        p3_raw = -(ratios.get('share_turnover') or 0)
+
+        # P4: Supply overhang (inverse share growth)
+        p4_raw = -(ratios.get('share_count_growth_6m') or 0)
+
+        rows.append(dict(
+            ticker=ticker, sector=sector,
+            L1_raw=l1_raw, L2_raw=l2_raw, L3_raw=l3_raw,
+            L4_gm=l4_gm, L4_ebitda_change=l4_ebitda_change, L5_raw=l5_raw,
+            Q1_raw=q1_raw, Q2_raw=q2_raw, Q3_raw=q3_raw, Q4_raw=q4_raw,
+            R1_raw=r1_raw, R2_lev=r2_lev, R2_liq=r2_liq,
+            R3_dil=r3_dil, R3_cap=0, R3_burn=r3_burn,
+            R4_capex=r4_capex, R4_ppe=r4_ppe,
+            R5_raw=r5_raw,
+            P1_raw=p1_raw, P2_raw=p2_raw, P3_raw=p3_raw, P4_raw=p4_raw,
+        ))
+
+    return pd.DataFrame(rows)

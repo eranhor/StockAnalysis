@@ -28,11 +28,11 @@ def init_db(db_path=None):
     print(f"Database initialized at {db_path or DB_PATH}")
 
 
-def insert_company(conn, ticker, name, gics_industry=None, sector=None, market_cap=None):
+def insert_company(conn, ticker, name, gics_industry=None, sector=None, market_cap=None, shares_outstanding=None):
     conn.execute("""
-        INSERT OR REPLACE INTO companies (ticker, name, gics_industry, sector, market_cap, last_updated)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    """, (ticker, name, gics_industry, sector, market_cap))
+        INSERT OR REPLACE INTO companies (ticker, name, gics_industry, sector, market_cap, shares_outstanding, last_updated)
+        VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    """, (ticker, name, gics_industry, sector, market_cap, shares_outstanding))
     conn.commit()
 
 
