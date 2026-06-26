@@ -348,9 +348,46 @@ def score_cohort(rows):
 
     df["model_version"] = "lqrp_v2"
 
-    # Data coverage: all sub-factors assumed OK (they come from the DB which has the data)
-    # Individual coverage flags are tracked in lqrp_scores.coverage_flags (JSON)
-    df["data_coverage_pct"] = 61.0  # default for pilot; enriched by rescore.py overlay
+    # Compute real data coverage
+    coverage_flags = {}
+    for _, r in df.iterrows():
+        ticker = r['ticker']
+        flags = {}
+        # Check which raw values are non-zero/non-default → real data
+        flags['L1'] = 'OK' if (r.get('L1_raw') and r['L1_raw'] != 0) else 'PROXY'
+        flags['L2'] = 'OK' if (r.get('L2_raw') and r['L2_raw'] != 0) else 'MISSING'
+        flags['L3'] = 'OK' if (r.get('L3_raw') and r['L3_raw'] != 0) else 'MISSING'
+        flags['L4'] = 'OK' if (r.get('L4_gm') and r['L4_gm'] > 0) else 'PROXY'
+        flags['L5'] = 'MANUAL' if (r.get('L5_raw') and r['L5_raw'] > 0) else 'WEAK'
+        flags['Q1'] = 'OK' if (r.get('Q1_raw') and r['Q1_raw'] != 0) else 'MISSING'
+        flags['Q2'] = 'OK' if (r.get('Q2_raw') and r['Q2_raw'] != 0) else 'PROXY'
+        flags['Q3'] = 'OK' if (r.get('Q3_raw') and r['Q3_raw'] != 0) else 'MISSING'
+        flags['Q4'] = 'OK'
+        flags['R1'] = 'OK' if (r.get('R1_raw') and r['R1_raw'] > 0) else 'PROXY'
+        flags['R2'] = 'OK' if (r.get('R2_lev') and r['R2_lev'] != 0.5) else 'PROXY'
+        flags['R3'] = 'OK' if (r.get('R3_dil') and r['R3_dil'] != 0) else 'MISSING'
+        flags['R4'] = 'OK' if (r.get('R4_capex') and r['R4_capex'] != 0) else 'MISSING'
+        flags['R5'] = 'OK' if (r.get('R5_raw') and r['R5_raw'] != 50) else 'PROXY'
+        flags['P1'] = 'OK' if (r.get('P1_raw') and r['P1_raw'] != 0) else 'PROXY'
+        flags['P2'] = 'OK' if (r.get('P2_raw') and r['P2_raw'] != 0) else 'PROXY'
+        flags['P3'] = 'OK' if (r.get('P3_raw') and r['P3_raw'] != 0) else 'MISSING'
+        flags['P4'] = 'OK' if (r.get('P4_raw') and r['P4_raw'] != 0) else 'MISSING'
+        # Scraper data upgrades flags
+        ticket_flags = coverage_flags.get(ticker, {})
+        ticket_flags.update(flags)
+        coverage_flags[ticker] = flags
+
+    # Weights for coverage calculation
+    wts = {'L1':0.30*0.45,'L2':0.20*0.45,'L3':0.20*0.45,'L4':0.15*0.45,'L5':0.15*0.45,
+           'Q1':0.34*0.25,'Q2':0.28*0.25,'Q3':0.22*0.25,'Q4':0.16*0.25,
+           'R1':0.30*0.20,'R2':0.20*0.20,'R3':0.20*0.20,'R4':0.15*0.20,'R5':0.15*0.20,
+           'P1':0.35*0.10,'P2':0.25*0.10,'P3':0.20*0.10,'P4':0.20*0.10}
+    total_w = sum(wts.values())
+    cov_pcts = {}
+    for ticker, flags in coverage_flags.items():
+        covered = sum(wts[k] for k, v in flags.items() if v in ('OK', 'MANUAL'))
+        cov_pcts[ticker] = round(covered / total_w * 100, 1)
+    df['data_coverage_pct'] = df['ticker'].map(cov_pcts).fillna(0)
 
     return df.sort_values("LQRP_score", ascending=False)
 

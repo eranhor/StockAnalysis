@@ -265,6 +265,12 @@ def extract_financials(data):
     elif "ocf_stability" not in fin:
         fin["ocf_stability"] = 50  # unknown
 
+    # Fix key name mismatches for insert_financials compatibility
+    if fin.get("capital_expenditure") is not None: fin["capex"] = fin["capital_expenditure"]
+    if fin.get("total_debt") is not None: fin["debt"] = fin["total_debt"]
+    if fin.get("operating_expense") is not None: fin["opex"] = fin["operating_expense"]
+    if not fin.get("debt"): fin["debt"] = fin.get("total_debt")
+
     return fin
 
 
@@ -335,6 +341,7 @@ def main():
     for _, row in df.iterrows():
         scores = row.to_dict()
         scores["scoring_date"] = today
+        scores["coverage_flags"] = {}  # dict, insert_scores will json.dumps it
         insert_scores(conn, row["ticker"], today, scores)
 
     # Rankings
