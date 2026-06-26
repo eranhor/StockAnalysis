@@ -158,27 +158,50 @@ def parse_3y(text):
 
 
 def parse_4c(text):
+    """Parse Appendix 4C — Quarterly Cashflow. Extract from both table and narrative."""
     results = {}
+
+    # Customer receipts — try table format first, then narrative
     m = re.search(r'(?:receipts from|from)\s*(?:customers|clients|sales).*?\$?[\s]*([\d,]+)', text, re.IGNORECASE)
     if not m:
-        m = re.search(r'(?:customer receipts|cash receipts).*?\$([\d,]+)', text, re.IGNORECASE)
+        m = re.search(r'(?:customer receipts|cash receipts)\s*(?:totalled|of|reaching|were|was)?\s*(?:approximately|circa)?\s*\$?([\d,.]+)\s*(million|m)?', text, re.IGNORECASE)
     if m:
-        try: results['customer_receipts'] = int(m.group(1).replace(',',''))
+        raw = m.group(1).replace(',','').strip()
+        try: results['customer_receipts'] = int(float(raw) * 1e6 if m.lastindex > 1 and m.group(2) else float(raw))
         except: pass
 
+    # Operating cash flow
     m = re.search(r'net (?:cash|operating).*?(?:from|provided).*?(?:operating|activities).*?\$?[\s]*\(?([\d,]+)\)?', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'(?:cash outflow|outflow).*?(?:operating|operations).*?(?:dropped|was|of)?\s*(?:by\s*\d+%|to)?\s*\$?([\d,.]+)\s*(million|m)?', text, re.IGNORECASE)
     if not m:
         m = re.search(r'operating (?:activities|cash flow).*?\$?[\s]*([\d,]+)', text, re.IGNORECASE)
     if m:
-        try: results['operating_cf'] = int(m.group(1).replace(',',''))
+        raw = m.group(1).replace(',','').strip()
+        try: results['operating_cf'] = int(float(raw) * 1e6 if m.lastindex > 1 and m.group(2) else float(raw))
         except: pass
 
+    # Cash balance
     m = re.search(r'cash and cash equivalents.*?\$?[\s]*([\d,]+)', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'cash (?:balance|at end|position).*?\$?([\d,.]+)\s*(million|m)?', text, re.IGNORECASE)
     if m:
-        try: results['cash_balance'] = int(m.group(1).replace(',',''))
+        raw = m.group(1).replace(',','').strip()
+        try: results['cash_balance'] = int(float(raw) * 1e6 if m.lastindex > 1 and m.group(2) else float(raw))
+        except: pass
+
+    # CapEx from 4C ("payments for PP&E" or "investing activities")
+    m = re.search(r'(?:payments for|purchase of).*?(?:property|plant|equipment|PP&E).*?\$?([\d,]+)', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'investing activities.*?\$?[\s]*\(?([\d,]+)\)?', text, re.IGNORECASE)
+    if m:
+        raw = m.group(1).replace(',','').strip()
+        try: results['capex'] = int(raw)
         except: pass
 
     results['parsed'] = len(results) > 0
+    if not results.get('parsed'):
+        results['raw_snippet'] = text[:800]
     return results
 
 
@@ -194,24 +217,38 @@ def parse_presentation(text):
             if raw: results['revenue_millions'] = float(raw)
         except: pass
 
-    # ARR
-    m = re.search(r'ARR.*?\$?([\d,.]+)\s*(million|m|billion|b)?', text, re.IGNORECASE)
-    if m:
-        try:
-            raw = m.group(1).replace(',','').strip()
-            if raw: results['arr_millions'] = float(raw)
-        except: pass
+    # ARR — multiple patterns for different formats
+    for pat in [
+        r'ARR.*?(?:reaching|of|to|circa|approximately)\s*\$?([\d,.]+)\s*(million|m|billion|b)?',
+        r'(?:annualised|annualized)\s*(?:recurring\s*)?revenue.*?ARR.*?\$?([\d,.]+)\s*(million|m)?',
+        r'ARR of approximately \$([\d,.]+)',
+        r'ARR (?:reached|grew to|of)\s*\$?([\d,.]+)\s*(million|m)?',
+    ]:
+        m = re.search(pat, text, re.IGNORECASE)
+        if m:
+            try:
+                raw = m.group(1).replace(',','').strip()
+                if raw: results['arr_millions'] = float(raw)
+                flags = m.lastindex or 0
+            except: pass
+            break
 
-    # Recurring %
+    # Recurring revenue %
     m = re.search(r'(\d+)\s*%\s*(?:recurring|recurring revenue)', text, re.IGNORECASE)
+    if not m:
+        m = re.search(r'(?:recurring|subscription).*?(\d+)\s*%', text, re.IGNORECASE)
     if m: results['recurring_pct'] = int(m.group(1))
+
+    # Customer count
+    m = re.search(r'(\d+)\s*(?:new|paying|active)\s*(?:clients|customers|accounts)', text, re.IGNORECASE)
+    if m: results['customer_count'] = int(m.group(1))
 
     results['parsed'] = len(results) > 0
     return results
 
 
 def parse_financial_report(text):
-    """Parse half-year/full-year reports for revenue, profit, OCF."""
+    """Parse half-year/full-year reports for revenue, profit, OCF, CapEx."""
     results = {}
     # Revenue
     m = re.search(r'(?:revenue|sales).*?(?:up|of|to)\s+\d+%?\s+to\s+\$?([\d,.]+)\s*(million|m|billion|b)?', text, re.IGNORECASE)
@@ -233,7 +270,17 @@ def parse_financial_report(text):
 
     # Operating cash flow
     m = re.search(r'(?:operating cash|net cash from operating).*?\$([\d,]+)', text, re.IGNORECASE)
-    if m: results['operating_cf'] = int(m.group(1).replace(',',''))
+    if m:
+        try: results['operating_cf'] = int(m.group(1).replace(',',''))
+        except: pass
+
+    # CapEx
+    m = re.search(r'(?:capital expenditure|purchase of PP&E|payments for PP&E).*?\$?([\d,.]+)\s*(million|m)?', text, re.IGNORECASE)
+    if m:
+        try:
+            raw = m.group(1).replace(',','').strip()
+            if raw: results['capex'] = float(raw)
+        except: pass
 
     results['parsed'] = len(results) > 0
     return results

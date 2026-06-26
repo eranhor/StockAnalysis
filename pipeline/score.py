@@ -428,13 +428,43 @@ def read_scoring_data(conn):
             GROUP BY transaction_type
         """, (ticker,)).fetchall()
 
-        # Get revenue announcements for L5
+        # Get revenue announcements for L5 + extracted data
         rev_anns = conn.execute("""
-            SELECT date, extracted_data FROM announcements
-            WHERE ticker = ? AND type IN ('FINANCIAL_REPORT', 'PRESENTATION', 'TRADING_UPDATE')
+            SELECT date, type, extracted_data FROM announcements
+            WHERE ticker = ? AND type IN ('4C','FINANCIAL_REPORT','PRESENTATION','TRADING_UPDATE')
             AND extracted_data IS NOT NULL
-            ORDER BY date DESC
+            ORDER BY date DESC LIMIT 20
         """, (ticker,)).fetchall()
+
+        # Extract scraped 4C data (most recent first)
+        scraped_ocf_values = []
+        scraped_capex = None
+        scraped_cash = None
+        scraped_customer_receipts = None
+        scraped_arr = None
+        scraped_recurring_pct = None
+        scraped_customer_count = None
+
+        for a in rev_anns:
+            try:
+                ed = json.loads(a['extracted_data'])
+                if a['type'] == '4C':
+                    if ed.get('operating_cf') and len(scraped_ocf_values) < 4:
+                        scraped_ocf_values.append(ed['operating_cf'])
+                    if not scraped_cash and ed.get('cash_balance'):
+                        scraped_cash = ed['cash_balance']
+                    if not scraped_capex and ed.get('capex'):
+                        scraped_capex = ed['capex']
+                    if not scraped_customer_receipts and ed.get('customer_receipts'):
+                        scraped_customer_receipts = ed['customer_receipts']
+                elif a['type'] in ('PRESENTATION', 'TRADING_UPDATE', 'FINANCIAL_REPORT'):
+                    if not scraped_arr and ed.get('arr_millions'):
+                        scraped_arr = ed['arr_millions']
+                    if not scraped_recurring_pct and ed.get('recurring_pct'):
+                        scraped_recurring_pct = ed['recurring_pct']
+                    if not scraped_customer_count and ed.get('customer_count'):
+                        scraped_customer_count = ed['customer_count']
+            except: pass
 
         # --- Build raw values ---
         mc = co.get('market_cap') or 1
@@ -453,11 +483,16 @@ def read_scoring_data(conn):
         l4_gm = ratios.get('gross_margin') or 0
         l4_ebitda_change = ratios.get('ebitda_margin_change') or 0
 
-        # L5: Commercial maturity (from announcements)
+        # L5: Commercial maturity (from scraped announcements)
         l5_raw = 0
         if rev_anns:
-            l5_raw = 20
-            if len(rev_anns) >= 4: l5_raw += 20
+            l5_raw = 20  # commercially launched (has announcements)
+            # Customer evidence
+            total_anns = len([a for a in rev_anns if a['type']=='4C']) + len([a for a in rev_anns if a['type']!='4C'])
+            if total_anns >= 4: l5_raw += 20  # sales motion proven
+            if scraped_customer_count and scraped_customer_count >= 3: l5_raw += 20  # 3+ paying customers
+            if scraped_arr and scraped_arr > 0: l5_raw += 20  # ARR evidence = commercial validation
+            # Milestone-driven conversion: check if ARR or revenue is growing
             revs = []
             for r in rev_anns:
                 try:
@@ -468,11 +503,32 @@ def read_scoring_data(conn):
             if len(revs) >= 2 and revs[0] > revs[-1]: l5_raw += 20
             if len(rev_anns) >= 6: l5_raw += 20
             l5_raw = min(l5_raw, 100)
-        else:
-            l5_raw = 0
+        if l5_raw == 0:
+            # Fallback to old L5 logic (from rev_anns only)
+            old_anns = conn.execute("""
+                SELECT date, extracted_data FROM announcements
+                WHERE ticker = ? AND type IN ('FINANCIAL_REPORT', 'PRESENTATION', 'TRADING_UPDATE')
+                AND extracted_data IS NOT NULL ORDER BY date DESC LIMIT 20
+            """, (ticker,)).fetchall()
+            if old_anns:
+                l5_raw = 20
+                if len(old_anns) >= 4: l5_raw += 20
+                revs2 = []
+                for r2 in old_anns:
+                    try:
+                        d = json.loads(r2['extracted_data'])
+                        v = d.get('revenue') or d.get('revenue_millions')
+                        if v: revs2.append(v)
+                    except: pass
+                if len(revs2) >= 2 and revs2[0] > revs2[-1]: l5_raw += 20
+                if len(old_anns) >= 6: l5_raw += 20
+                l5_raw = min(l5_raw, 100)
 
-        # Q1: Revenue quality (negated volatility CV)
-        q1_raw = -(ratios.get('revenue_volatility_cv') or 0)
+        # Q1: Revenue quality — use scraped recurring% if available, else volatility
+        if scraped_recurring_pct:
+            q1_raw = 0.7 * scraped_recurring_pct + 0.3 * (-(ratios.get('revenue_volatility_cv') or 0))
+        else:
+            q1_raw = -(ratios.get('revenue_volatility_cv') or 0)
 
         # Q2: Gross margin level + trend
         q2_raw = 0.7 * (ratios.get('gross_margin') or 0) + 0.3 * (ratios.get('ebitda_margin_change') or 0)
@@ -483,24 +539,45 @@ def read_scoring_data(conn):
         # Q4: Commercial scale
         q4_raw = np.log(max(mc, 1))
 
-        # R1: Cash runway (current ratio proxy)
-        r1_raw = ratios.get('current_ratio') or 0
+        # R1: Cash runway (from scraped 4C data if available, else current ratio)
+        if scraped_cash and scraped_ocf_values:
+            latest_ocf = scraped_ocf_values[0]
+            if latest_ocf < 0:
+                r1_raw = (scraped_cash / abs(latest_ocf)) * 3  # runway in months
+            else:
+                r1_raw = 36  # positive OCF
+        else:
+            r1_raw = ratios.get('current_ratio') or 0
 
-        # R2: Leverage + liquidity
-        nd_ebitda = ratios.get('nd_to_ebitda')
-        r2_lev = 1 / (abs(nd_ebitda or 0.5) + 0.01)
-        r2_liq = ratios.get('current_ratio') or 1.0
-
-        # R3: Dilution
-        r3_dil = ratios.get('share_count_growth_yoy') or 0
-        r3_burn = ratios.get('cash_burn_rate') or 0
-
-        # R4: Asset intensity
-        r4_capex = abs(ratios.get('capex_to_revenue') or 0)
+        # R4: Asset intensity (use quarterly data if available, else scraped)
+        if not ratios.get('capex_to_revenue') and scraped_capex:
+            # Use scraped capex with revenue from announcements
+            rev_for_capex = None
+            for a in rev_anns:
+                try:
+                    ed = json.loads(a['extracted_data'])
+                    rev_for_capex = ed.get('revenue') or ed.get('revenue_millions')
+                    if rev_for_capex: break
+                except: pass
+            if rev_for_capex and rev_for_capex > 0 and scraped_capex:
+                r4_capex = scraped_capex / rev_for_capex
+            else:
+                r4_capex = abs(ratios.get('capex_to_revenue') or 0)
+        else:
+            r4_capex = abs(ratios.get('capex_to_revenue') or 0)
         r4_ppe = abs(ratios.get('ppe_to_revenue') or 0)
 
-        # R5: Cash flow stability
-        r5_raw = ratios.get('ocf_stability') if ratios_row else 50
+        # R5: Cash flow stability (from scraped 4C data)
+        if scraped_ocf_values:
+            pos_count = sum(1 for v in scraped_ocf_values if v > 0)
+            if len(scraped_ocf_values) >= 4:
+                r5_raw = (pos_count / len(scraped_ocf_values)) * 100
+            elif len(scraped_ocf_values) == 3:
+                r5_raw = (pos_count / 3) * 100
+            else:
+                r5_raw = 100 if pos_count > 0 else 50
+        else:
+            r5_raw = ratios.get('ocf_stability') if ratios_row else 50
         if r5_raw is None: r5_raw = 50
 
         # P1: Insider net buying (from scraped 3Y) or fallback to ownership %
@@ -533,12 +610,21 @@ def read_scoring_data(conn):
         # P4: Supply overhang (inverse share growth)
         p4_raw = -(ratios.get('share_count_growth_6m') or 0)
 
+        # R2 computed values
+        nd_ebitda_val = ratios.get('nd_to_ebitda')
+        r2_lev_val = 1 / (abs(nd_ebitda_val or 0.5) + 0.01)
+        r2_liq_val = ratios.get('current_ratio') or 1.0
+
+        # R3: Dilution
+        r3_dil = ratios.get('share_count_growth_yoy') or 0
+        r3_burn = ratios.get('cash_burn_rate') or 0
+
         rows.append(dict(
             ticker=ticker, sector=sector,
             L1_raw=l1_raw, L2_raw=l2_raw, L3_raw=l3_raw,
             L4_gm=l4_gm, L4_ebitda_change=l4_ebitda_change, L5_raw=l5_raw,
             Q1_raw=q1_raw, Q2_raw=q2_raw, Q3_raw=q3_raw, Q4_raw=q4_raw,
-            R1_raw=r1_raw, R2_lev=r2_lev, R2_liq=r2_liq,
+            R1_raw=r1_raw, R2_lev=r2_lev_val, R2_liq=r2_liq_val,
             R3_dil=r3_dil, R3_cap=0, R3_burn=r3_burn,
             R4_capex=r4_capex, R4_ppe=r4_ppe,
             R5_raw=r5_raw,
