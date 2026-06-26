@@ -209,6 +209,33 @@ def extract_financials(data):
                     fin["revenue_volatility_cv"] = revs.iloc[:min(8,len(revs))].std() / revs.iloc[:min(8,len(revs))].mean() if revs.iloc[:min(8,len(revs))].mean() > 0 else 0
                 break
 
+    # === Compute ratios from raw values ===
+    rev = fin.get("revenue")
+    gp = fin.get("gross_profit")
+    ebitda = fin.get("ebitda")
+    ocf = fin.get("operating_cf")
+    fcf = fin.get("free_cf")
+    capex = fin.get("capital_expenditure")
+    cash_val = fin.get("cash")
+    debt_val = fin.get("total_debt")
+    ppe_val = fin.get("ppe")
+    if rev and rev > 0:
+        if gp: fin["gross_margin"] = gp / rev
+        if ebitda: fin["ebitda_margin"] = ebitda / rev
+        if ocf: fin["ocf_to_revenue"] = ocf / rev
+        if fcf: fin["fcf_to_revenue"] = fcf / rev
+        if capex: fin["capex_to_revenue"] = abs(capex) / rev
+        if ppe_val: fin["ppe_to_revenue"] = ppe_val / rev
+    if ebitda and ebitda != 0:
+        nd = (debt_val or 0) - (cash_val or 0)
+        fin["nd_to_ebitda"] = nd / ebitda
+    if ocf and ocf < 0 and cash_val:
+        fin["cash_burn_rate"] = abs(ocf)
+        fin["cash_runway_months"] = (cash_val / abs(ocf)) * 3
+    elif cash_val:
+        fin["cash_burn_rate"] = 0
+        fin["cash_runway_months"] = 36  # positive OCF → max runway
+
     return fin
 
 
@@ -245,6 +272,23 @@ def main():
         insert_info_snapshot(conn, ticker, info)
         insert_prices(conn, ticker, data["prices"])
         fin = extract_financials(data)
+        # Info fallback: if quarterly data didn't compute margins, use yfinance info
+        if not fin.get("gross_margin") and info.get("grossMargins"):
+            fin["gross_margin"] = info["grossMargins"]
+        if not fin.get("ebitda_margin") and info.get("ebitdaMargins"):
+            fin["ebitda_margin"] = info["ebitdaMargins"]
+        if not fin.get("ocf_to_revenue") and info.get("operatingCashflow") and fin.get("revenue"):
+            fin["ocf_to_revenue"] = info["operatingCashflow"] / fin["revenue"]
+        if not fin.get("fcf_to_revenue") and info.get("freeCashflow") and fin.get("revenue"):
+            fin["fcf_to_revenue"] = info["freeCashflow"] / fin["revenue"]
+        # Price-derived ratios
+        px = data["prices"]
+        if px is not None and not px.empty:
+            vol = px.get("Volume", pd.Series(dtype=float))
+            shares = fin.get("shares_outstanding") or info.get("sharesOutstanding")
+            if not vol.empty and shares and shares > 0:
+                fin["avg_daily_volume"] = vol.tail(126).mean()
+                fin["share_turnover"] = fin["avg_daily_volume"] / shares
         if fin.get("revenue") or fin.get("shares_outstanding"):
             fin["period_end"] = fin.get("period_end") or date.today().isoformat()
             insert_financials(conn, ticker, fin["period_end"], fin)
