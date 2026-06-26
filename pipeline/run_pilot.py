@@ -219,6 +219,10 @@ def extract_financials(data):
     cash_val = fin.get("cash")
     debt_val = fin.get("total_debt")
     ppe_val = fin.get("ppe")
+    net_income = fin.get("net_income")
+    shares_out = fin.get("shares_outstanding")
+    total_assets = fin.get("total_assets")
+
     if rev and rev > 0:
         if gp: fin["gross_margin"] = gp / rev
         if ebitda: fin["ebitda_margin"] = ebitda / rev
@@ -226,6 +230,7 @@ def extract_financials(data):
         if fcf: fin["fcf_to_revenue"] = fcf / rev
         if capex: fin["capex_to_revenue"] = abs(capex) / rev
         if ppe_val: fin["ppe_to_revenue"] = ppe_val / rev
+        if net_income: fin["net_margin"] = net_income / rev
     if ebitda and ebitda != 0:
         nd = (debt_val or 0) - (cash_val or 0)
         fin["nd_to_ebitda"] = nd / ebitda
@@ -235,6 +240,30 @@ def extract_financials(data):
     elif cash_val:
         fin["cash_burn_rate"] = 0
         fin["cash_runway_months"] = 36  # positive OCF → max runway
+
+    # Debt to equity
+    if debt_val and total_assets:
+        equity = total_assets - debt_val
+        if equity and equity > 0:
+            fin["debt_to_equity"] = debt_val / equity
+
+    # Revenue growth QoQ from quarterly data
+    if qf is not None and not qf.empty and len(qf.columns) >= 2:
+        for rk in ["Total Revenue", "Revenue", "Operating Revenue"]:
+            if rk in qf.index:
+                revs = qf.loc[rk].dropna()
+                if len(revs) >= 2:
+                    cur_q = revs.iloc[0]
+                    prior_q = revs.iloc[1]
+                    if prior_q > 0:
+                        fin["revenue_growth_qoq"] = (cur_q / prior_q) - 1
+                break
+
+    # OCF stability (if not set from quarterly CF, use info fallback)
+    if "ocf_stability" not in fin and ocf and ocf > 0:
+        fin["ocf_stability"] = 100  # positive OCF = stable
+    elif "ocf_stability" not in fin:
+        fin["ocf_stability"] = 50  # unknown
 
     return fin
 

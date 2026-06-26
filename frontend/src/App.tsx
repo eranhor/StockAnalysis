@@ -39,7 +39,50 @@ function scoreColor(v: number) {
   return 'text-red-400';
 }
 
-function SubBar({ label, value, max }: { label: string; value: number; max: number }) {
+const FACTORS: Record<string, {name: string; desc: string}> = {
+  L1: {name:'Valuation Compression', desc:'Rerating room from current valuation (lower multiple = more room)'},
+  L2: {name:'Growth Velocity', desc:'How fast the business is currently scaling'},
+  L3: {name:'Growth Acceleration', desc:'Whether growth is improving or slowing'},
+  L4: {name:'Operating Leverage', desc:'Capacity for revenue to convert to earnings'},
+  L5: {name:'Commercial Maturity', desc:'Likelihood of commercial conversion in 12-24 months'},
+  Q1: {name:'Revenue Quality Mix', desc:'Repeatability of revenue (recurring vs project-based)'},
+  Q2: {name:'Gross Margin Level+Trend', desc:'Economic quality and direction'},
+  Q3: {name:'Cash Conversion', desc:'Whether reported progress becomes cash'},
+  Q4: {name:'Commercial Proof Scale', desc:'How commercially substantial the business is'},
+  R1: {name:'Cash Runway', desc:'Capacity to survive without fresh capital'},
+  R2: {name:'Leverage & Liquidity', desc:'Financial stress and flexibility'},
+  R3: {name:'Dilution Risk', desc:'Capital markets dependency'},
+  R4: {name:'Asset Intensity', desc:'Operational complexity from asset intensity'},
+  R5: {name:'Cash Flow Stability', desc:'Consistency of cash generation'},
+  P1: {name:'Insider Net Buying', desc:'Whether insiders are adding exposure'},
+  P2: {name:'Register Quality', desc:'Supportive holder mix'},
+  P3: {name:'Underfollowed / Crowding', desc:'How crowded or undiscovered the stock is'},
+  P4: {name:'Supply Overhang', desc:'Near-term dilution pressure'},
+}
+
+const RATIO_LABELS: Record<string, string> = {
+  gross_margin: 'Gross Margin',
+  ebitda_margin: 'EBITDA Margin',
+  net_margin: 'Net Margin',
+  revenue_growth_yoy: 'Revenue Growth YoY',
+  revenue_growth_qoq: 'Revenue Growth QoQ',
+  revenue_growth_accel: 'Growth Acceleration',
+  ocf_to_revenue: 'OCF / Revenue',
+  fcf_to_revenue: 'FCF / Revenue',
+  current_ratio: 'Current Ratio',
+  debt_to_equity: 'Debt / Equity',
+  nd_to_ebitda: 'Net Debt / EBITDA',
+  revenue_volatility_cv: 'Revenue Volatility CV',
+  share_count_growth_yoy: 'Share Growth YoY',
+  share_count_growth_6m: 'Share Growth 6m',
+  cash_burn_rate: 'Cash Burn Rate',
+  cash_runway_months: 'Cash Runway (months)',
+  ebitda_margin_change: 'EBITDA Margin Change',
+  capex_to_revenue: 'CapEx / Revenue',
+  ppe_to_revenue: 'PP&E / Revenue',
+  avg_daily_volume: 'Avg Daily Volume',
+  share_turnover: 'Share Turnover',
+}
   const pct = Math.min(100, (value / max) * 100);
   return (
     <div className="flex items-center gap-2 mb-0.5">
@@ -51,6 +94,23 @@ function SubBar({ label, value, max }: { label: string; value: number; max: numb
     </div>
   );
 }
+
+function SubBar({ label, value, desc, max=100 }: { label: string; value: number; desc?: string; max?: number }) {
+  const pct = Math.min(100, Math.abs(value) / max * 100);
+  return (
+    <div className="mb-1">
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-300 font-medium min-w-[220px]">{label}</span>
+        <span className={`text-xs font-bold tabular-nums min-w-[28px] ${value >= 70 ? 'text-green-400' : value >= 50 ? 'text-yellow-400' : 'text-red-400'}`}>{value?.toFixed(0)}</span>
+        <div className="flex-1 h-2 bg-gray-800 rounded overflow-hidden">
+          <div className={`h-full rounded ${value >= 70 ? 'bg-green-600' : value >= 50 ? 'bg-yellow-600' : 'bg-red-600'}`} style={{width:`${pct}%`}}/>
+        </div>
+      </div>
+      {desc && <div className="text-[10px] text-gray-600 ml-[248px]">{desc}</div>}
+    </div>
+  );
+}
+
 
 function DetailDrawer({ ticker, onClose }: { ticker: string; onClose: () => void }) {
   const [detail, setDetail] = useState<CompanyDetail | null>(null);
@@ -66,7 +126,7 @@ function DetailDrawer({ ticker, onClose }: { ticker: string; onClose: () => void
 
   if (loading) return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="text-gray-400">Loading {ticker}...</div>
       </div>
     </div>
@@ -74,7 +134,7 @@ function DetailDrawer({ ticker, onClose }: { ticker: string; onClose: () => void
 
   if (!detail?.score) return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-2xl" onClick={e => e.stopPropagation()}>
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-3xl" onClick={e => e.stopPropagation()}>
         <div className="text-red-400">No data for {ticker}</div>
         <button onClick={onClose} className="mt-4 text-sm text-gray-500 hover:text-white">Close</button>
       </div>
@@ -86,83 +146,75 @@ function DetailDrawer({ ticker, onClose }: { ticker: string; onClose: () => void
   const ratios = detail.ratios?.[0] || {};
   const anns = detail.announcements || [];
 
+  const groups: [string, string, any[]][] = [
+    ['L', 'Liftoff (45%)', [['L1','L1_score'],['L2','L2_score'],['L3','L3_score'],['L4','L4_score'],['L5','L5_score']]],
+    ['Q', 'Quality (25%)', [['Q1','Q1_score'],['Q2','Q2_score'],['Q3','Q3_score'],['Q4','Q4_score']]],
+    ['R', 'Robustness (20%)', [['R1','R1_score'],['R2','R2_score'],['R3','R3_score'],['R4','R4_score'],['R5','R5_score']]],
+    ['P', 'Positioning (10%)', [['P1','P1_score'],['P2','P2_score'],['P3','P3_score'],['P4','P4_score']]],
+  ];
+
   return (
     <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center" onClick={onClose}>
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
-        {/* Header */}
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-xl font-bold">{ticker} <span className="text-gray-400 text-sm">{c.name}</span></h2>
-            <p className="text-xs text-gray-500">{c.sector} · ${(c.market_cap/1e6)?.toFixed(0) || '?'}M</p>
+            <p className="text-xs text-gray-500">{c.sector} · ${(c.market_cap/1e6)?.toFixed(0) || '?'}M mc · ${(c.enterprise_value/1e6)?.toFixed(0) || '?'}M ev</p>
           </div>
           <button onClick={onClose} className="text-gray-500 hover:text-white text-lg">✕</button>
         </div>
 
-        {/* LQRP Score */}
         <div className="mb-4 p-3 bg-gray-950 rounded border border-gray-800">
-          <div className="text-xs text-gray-500 mb-1">LQRP SCORE</div>
           <div className="flex items-center gap-3">
-            <span className={`text-2xl font-bold ${scoreColor(s.LQRP_score)}`}>{s.LQRP_score?.toFixed(1)}</span>
-            <span className={`text-[10px] px-1 py-0.5 rounded border ${badgeColor(s.role)}`}>{s.role}</span>
-            <span className="text-xs text-gray-500">{s.gate_status}</span>
+            <span className={`text-3xl font-bold ${scoreColor(s.LQRP_score)}`}>{s.LQRP_score?.toFixed(1)}</span>
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">LQRP</span>
+                <span className={`text-[10px] px-1 py-0.5 rounded border ${badgeColor(s.role)}`}>{s.role}</span>
+                <span className="text-[10px] text-gray-500">{s.gate_status}</span>
+              </div>
+              <div className="text-[10px] text-gray-600 mt-0.5">
+                0.45×{s.L_score?.toFixed(0)} + 0.25×{s.Q_score?.toFixed(0)} + 0.20×{s.R_score?.toFixed(0)} + 0.10×{s.P_score?.toFixed(0)} = {s.LQRP_score?.toFixed(1)}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Component scores */}
-        <div className="mb-4">
-          <div className="text-xs text-gray-500 mb-2">COMPONENT SCORES</div>
-          <div className="grid grid-cols-4 gap-2">
-            {[
-              ['Liftoff', s.L_score, s.L1_score, s.L2_score, s.L3_score, s.L4_score, s.L5_score],
-              ['Quality', s.Q_score, s.Q1_score, s.Q2_score, s.Q3_score, s.Q4_score],
-              ['Robust', s.R_score, s.R1_score, s.R2_score, s.R3_score, s.R4_score, s.R5_score],
-              ['Position', s.P_score, s.P1_score, s.P2_score, s.P3_score, s.P4_score],
-            ].map(([label, total, ...subs]: any[]) => (
-              <div key={label} className="p-2 bg-gray-950 rounded border border-gray-800">
-                <div className="flex justify-between mb-1">
-                  <span className="text-[10px] text-gray-400">{label}</span>
-                  <span className={`text-xs font-bold ${scoreColor(total)}`}>{total?.toFixed(0)}</span>
-                </div>
-                {subs.map((v: number, i: number) => (
-                  <div key={i} className="flex justify-between text-[10px]">
-                    <span className="text-gray-600">{label[0]}{i+1}</span>
-                    <span className="text-gray-400">{v?.toFixed(0)}</span>
-                  </div>
-                ))}
-              </div>
+        {groups.map(([letter, label, subs]) => (
+          <div key={letter} className="mb-4">
+            <div className="text-sm font-semibold text-gray-300 mb-2">{label} · <span className={scoreColor(s[letter+'_score'])}>{s[letter+'_score']?.toFixed(0)}</span></div>
+            {subs.map(([key, scoreKey]: any) => (
+              <SubBar key={key}
+                label={`${key} · ${FACTORS[key]?.name || key}`}
+                value={s[scoreKey] || 0}
+                desc={FACTORS[key]?.desc}
+              />
             ))}
           </div>
-        </div>
+        ))}
 
-        {/* Formula */}
-        <div className="mb-4 p-2 bg-gray-950 rounded border border-gray-800 text-[10px] text-gray-500">
-          0.45×{s.L_score?.toFixed(0)} + 0.25×{s.Q_score?.toFixed(0)} + 0.20×{s.R_score?.toFixed(0)} + 0.10×{s.P_score?.toFixed(0)} = {s.LQRP_score?.toFixed(1)}
-        </div>
-
-        {/* Raw Financial Ratios */}
         <div className="mb-4">
-          <div className="text-xs text-gray-500 mb-2">RAW DATA (from financial_ratios table)</div>
-          <div className="grid grid-cols-2 gap-1 text-[10px]">
+          <div className="text-sm font-semibold text-gray-300 mb-2">RAW DATA — Financial Ratios</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[10px]">
             {Object.entries(ratios)
-              .filter(([k]) => !['ticker','period_end','data_quality'].includes(k))
+              .filter(([k]) => RATIO_LABELS[k])
               .map(([k, v]: any) => (
-                <div key={k} className="flex justify-between p-1 bg-gray-950 rounded">
-                  <span className="text-gray-500">{k}</span>
-                  <span className="text-gray-300 tabular-nums">{typeof v === 'number' ? v.toFixed(3) : v || '—'}</span>
+                <div key={k} className="flex justify-between p-1.5 bg-gray-950 rounded">
+                  <span className="text-gray-500">{RATIO_LABELS[k] || k}</span>
+                  <span className="text-gray-300 tabular-nums font-medium">{typeof v === 'number' ? (Math.abs(v) < 10 ? v.toFixed(4) : v.toFixed(1)) : v || '—'}</span>
                 </div>
               ))}
           </div>
         </div>
 
-        {/* Announcements */}
         {anns.length > 0 && (
           <div>
-            <div className="text-xs text-gray-500 mb-2">RECENT ANNOUNCEMENTS ({anns.length})</div>
-            <div className="space-y-1 max-h-40 overflow-y-auto">
+            <div className="text-sm font-semibold text-gray-300 mb-2">ASX ANNOUNCEMENTS ({anns.length})</div>
+            <div className="space-y-1 max-h-36 overflow-y-auto">
               {anns.map((a: any, i: number) => (
-                <div key={i} className="text-[10px] p-1 bg-gray-950 rounded flex justify-between">
+                <div key={i} className="text-[10px] p-1.5 bg-gray-950 rounded flex justify-between">
                   <span className="text-gray-400">{a.date} · {a.type}</span>
-                  <span className="text-gray-600 truncate ml-2">{a.headline?.slice(0, 60)}</span>
+                  <span className="text-gray-500 truncate ml-2 max-w-[300px]">{a.headline}</span>
                 </div>
               ))}
             </div>
